@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property name="LOG_FILE" value="target/test.log}"/>
+  <include resource="org/springframework/boot/logging/logback/base.xml"/>
+  <!-- TRACE < DEBUG < INFO < WARN < ERROR < FATAL < OFF -->
+  <root level="warn"/>
+
+  <logger name="tech.simter.start.reactor" level="WARN"/>
+  <logger name="io.reactor" level="WARN"/>
+</configuration>
