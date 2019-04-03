@@ -17,29 +17,20 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
+ * `subscribeOn` control which thread the previous/next operator running on until to the next occurrence of a `publishOn`.
+ *
  * @author RJ
  */
 @TestMethodOrder(OrderAnnotation.class)
-class MonoPublishOnAndSubscribeOnTest {
-  private Logger logger = LoggerFactory.getLogger(MonoPublishOnAndSubscribeOnTest.class);
+class SubscribeOnTest {
+  private Logger logger = LoggerFactory.getLogger(SubscribeOnTest.class);
 
-  // by default, all operator run on Main-Thread
+  /**
+   * influence the upstream
+   */
   @Test
-  @Order(10)
-  void defaultBehavior() {
-    long mainThreadId = Thread.currentThread().getId();
-    StepVerifier.create(
-      Mono.just(mainThreadId)
-        .map(it -> Tuples.of(it, Thread.currentThread().getId()))
-        .map(it -> Tuples.of(it.getT1(), it.getT2(), Thread.currentThread().getId()))
-    ).expectNext(Tuples.of(mainThreadId, mainThreadId, mainThreadId))
-      .verifyComplete();
-  }
-
-  // `subscribeOn` control which thread the previous/next operator running on until to the next occurrence of a `publishOn`.
-  @Test
-  @Order(20)
-  void subscribeOn() throws InterruptedException {
+  @Order(1)
+  void influenceUpStream() throws InterruptedException {
     Long mainThreadId = Thread.currentThread().getId();
 
     // create three different single-thread scheduler for test
@@ -61,10 +52,12 @@ class MonoPublishOnAndSubscribeOnTest {
     }).verifyComplete();
   }
 
-  // only the first `subscribeOn` take influence
+  /**
+   * only the first subscribeOn take influence
+   */
   @Test
-  @Order(21)
-  void subscribeOn_subscribeOn() throws InterruptedException {
+  @Order(2)
+  void onlyTheFirstSubscribeOnValid() throws InterruptedException {
     Long mainThreadId = Thread.currentThread().getId();
 
     // create three different single-thread scheduler for test
@@ -82,7 +75,7 @@ class MonoPublishOnAndSubscribeOnTest {
         .subscribeOn(st[1].scheduler) // would be ignore
         .map(it -> Tuples.of(it.getT1(), it.getT2(), Thread.currentThread().getId()))                         // T3
     ).consumeNextWith(it -> {
-      logger.debug("mainThreadId={}, subThreadId={}, operatorThreadIds={}", mainThreadId,
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
         Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
         it.toString());
       assertAll(
@@ -93,10 +86,12 @@ class MonoPublishOnAndSubscribeOnTest {
     }).verifyComplete();
   }
 
-  // `subscribeOn` take influence until to the next occurrence of a `publishOn`.
+  /**
+   * subscribeOn take influence until the next occurrence of publishOn
+   */
   @Test
-  @Order(22)
-  void subscribeOn_publishOn() throws InterruptedException {
+  @Order(3)
+  void influenceUpStreamUntilNextPublishOn() throws InterruptedException {
     Long mainThreadId = Thread.currentThread().getId();
 
     // create three different single-thread scheduler for test
@@ -114,7 +109,7 @@ class MonoPublishOnAndSubscribeOnTest {
         .publishOn(st[1].scheduler)   // publish on another thread
         .map(it -> Tuples.of(it.getT1(), it.getT2(), Thread.currentThread().getId()))                         // T3
     ).consumeNextWith(it -> {
-      logger.debug("mainThreadId={}, subThreadId={}, operatorThreadIds={}", mainThreadId,
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
         Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
         it.toString());
       assertAll(
@@ -125,68 +120,14 @@ class MonoPublishOnAndSubscribeOnTest {
     }).verifyComplete();
   }
 
-
-  // `subscribeOn` control which thread the previous/next operator running on until to the next occurrence of a `publishOn`.
+  /**
+   * subscribeOn influence upstream before any publishOn.
+   * <p>
+   * Code is same with {@link PublishOnTest#downwardStrongerThanSubscribeOn()}.
+   */
   @Test
-  @Order(30)
-  void publishOn() throws InterruptedException {
-    Long mainThreadId = Thread.currentThread().getId();
-
-    // create three different single-thread scheduler for test
-    SingleThreadScheduler st = SingleThreadScheduler.createOne();
-    assertNotEquals(mainThreadId, st.threadId);
-
-    StepVerifier.create(
-      // record all thread id that operator running on
-      Mono.just(mainThreadId)
-        .map(it -> Thread.currentThread().getId())                                                            // T1
-        .publishOn(st.scheduler) // publish on another thread
-        .map(it -> Tuples.of(it, Thread.currentThread().getId()))                                             // T2
-    ).consumeNextWith(it -> {
-      logger.debug("mainThreadId={}, subThreadId={}, operatorThreadIds={}", mainThreadId, st.threadId, it.toString());
-      assertAll(
-        () -> assertEquals(mainThreadId, it.getT1(), "T1"),
-        () -> assertEquals(st.threadId, it.getT2(), "T2")
-      );
-    }).verifyComplete();
-  }
-
-  // only the first `subscribeOn` take influence
-  @Test
-  @Order(31)
-  void publishOn_publishOn() throws InterruptedException {
-    Long mainThreadId = Thread.currentThread().getId();
-
-    // create three different single-thread scheduler for test
-    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(2);
-    assertNotEquals(mainThreadId, st[0].threadId);
-    assertNotEquals(mainThreadId, st[1].threadId);
-    assertNotEquals(st[0].threadId, st[1].threadId);
-
-    StepVerifier.create(
-      // record all thread id that operator running on
-      Mono.just(mainThreadId)
-        .map(it -> Thread.currentThread().getId())                                                            // T1
-        .publishOn(st[0].scheduler) // publish on another thread
-        .map(it -> Tuples.of(it, Thread.currentThread().getId()))                                             // T2
-        .publishOn(st[1].scheduler) // publish on another thread
-        .map(it -> Tuples.of(it.getT1(), it.getT2(), Thread.currentThread().getId()))                         // T3
-    ).consumeNextWith(it -> {
-      logger.debug("mainThreadId={}, subThreadId={}, operatorThreadIds={}", mainThreadId,
-        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
-        it.toString());
-      assertAll(
-        () -> assertEquals(mainThreadId, it.getT1(), "T1"),
-        () -> assertEquals(st[0].threadId, it.getT2(), "T2"), // by publishOn(st[0].scheduler)
-        () -> assertEquals(st[1].threadId, it.getT3(), "T3")  // by publishOn(st[1].scheduler)
-      );
-    }).verifyComplete();
-  }
-
-  // publishOn downward prior to subscribeOn, until next to meet another publishOn
-  @Test
-  @Order(40)
-  void publishOn_subscribeOn_publishOn() throws InterruptedException {
+  @Order(4)
+  void influenceUpStreamBeforeAnyPublishOn() throws InterruptedException {
     Long mainThreadId = Thread.currentThread().getId();
 
     // create three different single-thread scheduler for test
@@ -203,19 +144,19 @@ class MonoPublishOnAndSubscribeOnTest {
         .map(it -> Thread.currentThread().getId())                                                            // T1
         .publishOn(st[0].scheduler)
         .map(it -> Tuples.of(it, Thread.currentThread().getId()))                                             // T2
-        .subscribeOn(st[1].scheduler)
+        .publishOn(st[1].scheduler)
         .map(it -> Tuples.of(it.getT1(), it.getT2(), Thread.currentThread().getId()))                         // T3
-        .publishOn(st[2].scheduler)
+        .subscribeOn(st[2].scheduler)
         .map(it -> Tuples.of(it.getT1(), it.getT2(), it.getT3(), Thread.currentThread().getId()))             // T4
     ).consumeNextWith(it -> {
-      logger.debug("mainThreadId={}, subThreadId={}, operatorThreadIds={}", mainThreadId,
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
         Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
         it.toString());
       assertAll(
-        () -> assertEquals(st[1].threadId, it.getT1(), "T1"), // by subscribeOn(st[1].scheduler)
+        () -> assertEquals(st[2].threadId, it.getT1(), "T1"), // by subscribeOn(st[2].scheduler)
         () -> assertEquals(st[0].threadId, it.getT2(), "T2"), // by publishOn(st[0].scheduler)
-        () -> assertEquals(st[0].threadId, it.getT3(), "T3"), // by publishOn(st[0].scheduler)
-        () -> assertEquals(st[2].threadId, it.getT4(), "T4")  // by publishOn(st[2].scheduler)
+        () -> assertEquals(st[1].threadId, it.getT3(), "T3"), // by publishOn(st[1].scheduler)
+        () -> assertEquals(st[1].threadId, it.getT4(), "T4")  // by publishOn(st[1].scheduler)
       );
     }).verifyComplete();
   }
