@@ -91,8 +91,6 @@ class PublishOnTest {
    * subscribeOn only influence the upstreams before publishOn.
    * <p>
    * Code is same with {@link SubscribeOnTest#influenceUpStreamBeforeAnyPublishOn()}.
-   *
-   * @throws InterruptedException
    */
   @Test
   @Order(3)
@@ -126,6 +124,201 @@ class PublishOnTest {
         () -> assertEquals(st[0].threadId, it.getT2(), "T2"), // by publishOn(st[0].scheduler)
         () -> assertEquals(st[1].threadId, it.getT3(), "T3"), // by publishOn(st[1].scheduler)
         () -> assertEquals(st[1].threadId, it.getT4(), "T4")  // by publishOn(st[1].scheduler)
+      );
+    }).verifyComplete();
+  }
+
+  @Test
+  @Order(4)
+  void nestedMonoDefaultRunningOnParentScheduler() throws InterruptedException {
+    SingleThreadScheduler st = SingleThreadScheduler.createOne();
+
+    final Long[] operatorThreadIds = new Long[3];
+    StepVerifier.create(
+      Mono.just(0)
+        .publishOn(st.scheduler)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())
+        .then(Mono.just(0).doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())) // nested 1
+        .flatMap(it -> Mono.just(0).doOnNext(it2 -> operatorThreadIds[2] = Thread.currentThread().getId())) // nested 2
+    ).consumeNextWith(it -> {
+      logger.debug("subThreadId={}, operatorThreadIds={}", st.threadId,
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st.threadId, operatorThreadIds[0], "0"), // by publishOn(st.scheduler)
+        () -> assertEquals(st.threadId, operatorThreadIds[1], "1"), // by publishOn(st.scheduler)
+        () -> assertEquals(st.threadId, operatorThreadIds[2], "2")  // by publishOn(st.scheduler)
+      );
+    }).verifyComplete();
+  }
+
+  @Test
+  @Order(5)
+  void parentPublishOnNotInfluenceNestedSubscribe() throws InterruptedException {
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(3);
+    final Long[] operatorThreadIds = new Long[3];
+    StepVerifier.create(
+      Mono.just(0)
+        .publishOn(st[0].scheduler)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())
+        .then(Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())
+          .subscribeOn(st[1].scheduler) // nested 1
+        )
+        .flatMap(it -> Mono.just(0)
+          .doOnNext(it2 -> operatorThreadIds[2] = Thread.currentThread().getId())
+          .subscribeOn(st[2].scheduler) // nested 2
+        )
+    ).consumeNextWith(it -> {
+      logger.debug("subThreadIds={}, operatorThreadIds={}",
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"), // by publishOn(st[0].scheduler)
+        () -> assertEquals(st[1].threadId, operatorThreadIds[1], "1"), // by subscribeOn(st[1].scheduler)
+        () -> assertEquals(st[2].threadId, operatorThreadIds[2], "1")  // by subscribeOn(st[2].scheduler)
+      );
+    }).verifyComplete();
+  }
+
+  @Test
+  @Order(6)
+  void parentPublishOnInfluenceNestedPublish() throws InterruptedException {
+    Long mainThreadId = Thread.currentThread().getId();
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(2);
+    final Long[] operatorThreadIds = new Long[3];
+
+    // then
+    StepVerifier.create(
+      Mono.just(0)
+        .publishOn(st[0].scheduler)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())   // 0
+        .then(Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId()) // 1
+          .publishOn(st[1].scheduler) // nested
+          .doOnNext(it -> operatorThreadIds[2] = Thread.currentThread().getId()) // 2
+        )
+    ).consumeNextWith(it -> {
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[2], "2")
+      );
+    }).verifyComplete();
+
+    // flatMap
+    StepVerifier.create(
+      Mono.just(0)
+        .publishOn(st[0].scheduler)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())   // 0
+        .flatMap(t0 -> Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId()) // 1
+          .publishOn(st[1].scheduler) // nested
+          .doOnNext(it -> operatorThreadIds[2] = Thread.currentThread().getId()) // 2
+        )
+    ).consumeNextWith(it -> {
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[2], "2")
+      );
+    }).verifyComplete();
+  }
+
+  @Test
+  @Order(7)
+  void nestedPublishOnInfluenceParentDownStreamPublish() throws InterruptedException {
+    Long mainThreadId = Thread.currentThread().getId();
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(2);
+    final Long[] operatorThreadIds = new Long[5];
+    StepVerifier.create(
+      Mono.just(0)
+        .then(Mono.just(0)
+          .publishOn(st[0].scheduler) // nested 1
+          .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId()) // 0
+        )
+        .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())   // 1
+        .flatMap(t0 -> Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[2] = Thread.currentThread().getId()) // 2
+          .publishOn(st[1].scheduler) // nested 2
+          .doOnNext(it -> operatorThreadIds[3] = Thread.currentThread().getId()) // 3
+        )
+        .doOnNext(it -> operatorThreadIds[4] = Thread.currentThread().getId())   // 4
+    ).consumeNextWith(it -> {
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[2], "2"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[3], "3"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[4], "4")
+      );
+    }).verifyComplete();
+  }
+
+  // then
+  @Test
+  @Order(8)
+  void nestedPublishOnNotInfluenceParentUpStream1() throws InterruptedException {
+    Long mainThreadId = Thread.currentThread().getId();
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(2);
+    final Long[] operatorThreadIds = new Long[4];
+    StepVerifier.create(
+      Mono.just(0)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())    // 0
+        .then(Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())  // 1
+          .publishOn(st[1].scheduler) // nested 1
+          .doOnNext(it -> operatorThreadIds[2] = Thread.currentThread().getId())  // 2
+        )
+        .doOnNext(it -> operatorThreadIds[3] = Thread.currentThread().getId())    // 3
+        .subscribeOn(st[0].scheduler)
+    ).consumeNextWith(it -> {
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[2], "2"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[3], "3")
+      );
+    }).verifyComplete();
+  }
+
+  // flatMap
+  @Test
+  @Order(9)
+  void nestedPublishOnNotInfluenceParentUpStream2() throws InterruptedException {
+    Long mainThreadId = Thread.currentThread().getId();
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(2);
+    final Long[] operatorThreadIds = new Long[4];
+    StepVerifier.create(
+      Mono.just(0)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())    // 0
+        .flatMap(it0 -> Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())  // 1
+          .publishOn(st[1].scheduler) // nested 2
+          .doOnNext(it2 -> operatorThreadIds[2] = Thread.currentThread().getId()) // 2
+        )
+        .doOnNext(it -> operatorThreadIds[3] = Thread.currentThread().getId())    // 3
+        .subscribeOn(st[0].scheduler)
+    ).consumeNextWith(it -> {
+      logger.debug("mainThreadId={}, subThreadIds={}, operatorThreadIds={}", mainThreadId,
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[2], "2"),
+        () -> assertEquals(st[1].threadId, operatorThreadIds[3], "3")
       );
     }).verifyComplete();
   }
