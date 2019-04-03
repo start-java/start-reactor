@@ -322,4 +322,28 @@ class PublishOnTest {
       );
     }).verifyComplete();
   }
+
+  @Test
+  @Order(10)
+  void fromCallable() throws InterruptedException {
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(1);
+    final Long[] operatorThreadIds = new Long[3];
+    StepVerifier.create(
+      Mono.just(0)
+        .publishOn(st[0].scheduler)
+        .fromCallable(() -> operatorThreadIds[0] = Thread.currentThread().getId())
+        .flatMap(t0 -> Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())
+        ).doOnNext(it -> operatorThreadIds[2] = Thread.currentThread().getId())
+    ).consumeNextWith(it -> {
+      logger.debug("subThreadIds={}, operatorThreadIds={}",
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"),
+        () -> assertEquals(st[0].threadId, operatorThreadIds[2], "2")
+      );
+    }).verifyComplete();
+  }
 }
