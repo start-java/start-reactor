@@ -1,4 +1,4 @@
-package tech.simter.start.reactor;
+package tech.simter.start.reactor.scheduler;
 
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -11,16 +11,16 @@ import java.util.concurrent.Executors;
  *
  * @author RJ
  */
-class SingleThreadScheduler {
-  Scheduler scheduler;
-  Long threadId;
+public class SingleThreadScheduler {
+  public Scheduler scheduler;
+  public Long threadId;
 
   private SingleThreadScheduler(Scheduler scheduler, Long threadId) {
     this.scheduler = scheduler;
     this.threadId = threadId;
   }
 
-  static SingleThreadScheduler[] createMany(int count) throws InterruptedException {
+  public static SingleThreadScheduler[] createMany(int count) throws InterruptedException {
     CountDownLatch cdl = new CountDownLatch(count);
     final SingleThreadScheduler[] s = new SingleThreadScheduler[count];
     for (int i = 0; i < count; i++) {
@@ -36,7 +36,7 @@ class SingleThreadScheduler {
     return s;
   }
 
-  static SingleThreadScheduler createOne() throws InterruptedException {
+  public static SingleThreadScheduler createOne() throws InterruptedException {
     CountDownLatch cdl = new CountDownLatch(1);
     Scheduler scheduler = Schedulers.fromExecutor(Executors.newSingleThreadExecutor());
     final Long[] subThreadId = new Long[1];
