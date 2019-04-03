@@ -160,4 +160,44 @@ class SubscribeOnTest {
       );
     }).verifyComplete();
   }
+
+  /**
+   * Logic is same with {@link SubscribeOnTest#influenceUpStreamBeforeAnyPublishOn()}.
+   */
+  @Test
+  @Order(5)
+  void doOnNextVersion() throws InterruptedException {
+    Long mainThreadId = Thread.currentThread().getId();
+
+    // create three different single-thread scheduler for test
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(3);
+    assertAll(
+      () -> assertNotEquals(st[0].scheduler, st[1].scheduler, "0≠1"),
+      () -> assertNotEquals(st[0].scheduler, st[2].scheduler, "0≠2"),
+      () -> assertNotEquals(st[1].scheduler, st[2].scheduler, "1≠2")
+    );
+
+    final Long[] operatorThreadIds = new Long[4];
+    StepVerifier.create(
+      // record all thread id that operator running on
+      Mono.just(mainThreadId)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())             // 0
+        .publishOn(st[0].scheduler)
+        .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())             // 1
+        .publishOn(st[1].scheduler)
+        .doOnNext(it -> operatorThreadIds[2] = Thread.currentThread().getId())             // 2
+        .subscribeOn(st[2].scheduler)
+        .doOnNext(it -> operatorThreadIds[3] = Thread.currentThread().getId())             // 3
+    ).consumeNextWith(it -> {
+      logger.debug("subThreadIds={}, operatorThreadIds={}",
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[2].threadId, operatorThreadIds[0], "0"), // by subscribeOn(st[2].scheduler)
+        () -> assertEquals(st[0].threadId, operatorThreadIds[1], "1"), // by publishOn(st[0].scheduler)
+        () -> assertEquals(st[1].threadId, operatorThreadIds[2], "2"), // by publishOn(st[1].scheduler)
+        () -> assertEquals(st[1].threadId, operatorThreadIds[3], "3")  // by publishOn(st[1].scheduler)
+      );
+    }).verifyComplete();
+  }
 }
