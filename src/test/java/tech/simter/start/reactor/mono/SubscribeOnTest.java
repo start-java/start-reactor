@@ -200,4 +200,55 @@ class SubscribeOnTest {
       );
     }).verifyComplete();
   }
+
+  @Test
+  @Order(6)
+  void nestedMonoDefaultRunningOnParentScheduler() throws InterruptedException {
+    SingleThreadScheduler st = SingleThreadScheduler.createOne();
+
+    final Long[] operatorThreadIds = new Long[3];
+    StepVerifier.create(
+      Mono.just(0)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())
+        .then(Mono.just(0).doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId()))           // nested 1
+        .flatMap(it -> Mono.just(0).doOnNext(it2 -> operatorThreadIds[2] = Thread.currentThread().getId())) // nested 2
+        .subscribeOn(st.scheduler)
+    ).consumeNextWith(it -> {
+      logger.debug("subThreadId={}, operatorThreadIds={}", st.threadId,
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st.threadId, operatorThreadIds[0], "0"), // by subscribeOn(st.scheduler)
+        () -> assertEquals(st.threadId, operatorThreadIds[1], "1"), // by subscribeOn(st.scheduler)
+        () -> assertEquals(st.threadId, operatorThreadIds[2], "2")  // by subscribeOn(st.scheduler)
+      );
+    }).verifyComplete();
+  }
+
+  @Test
+  @Order(7)
+  void parentSubscribeOnNotInfluenceNested() throws InterruptedException {
+    SingleThreadScheduler[] st = SingleThreadScheduler.createMany(3);
+    final Long[] operatorThreadIds = new Long[3];
+    StepVerifier.create(
+      Mono.just(0)
+        .doOnNext(it -> operatorThreadIds[0] = Thread.currentThread().getId())
+        .then(Mono.just(0)
+          .doOnNext(it -> operatorThreadIds[1] = Thread.currentThread().getId())
+          .subscribeOn(st[1].scheduler) // nested 1
+        )
+        .flatMap(it -> Mono.just(0)
+          .doOnNext(it2 -> operatorThreadIds[2] = Thread.currentThread().getId())
+          .subscribeOn(st[2].scheduler) // nested 2
+        ).subscribeOn(st[0].scheduler)
+    ).consumeNextWith(it -> {
+      logger.debug("subThreadIds={}, operatorThreadIds={}",
+        Arrays.stream(st).map(s -> s.threadId.toString()).collect(Collectors.joining(",")),
+        Arrays.stream(operatorThreadIds).map(Object::toString).collect(Collectors.joining(",")));
+      assertAll(
+        () -> assertEquals(st[0].threadId, operatorThreadIds[0], "0"), // by subscribeOn(st[0].scheduler)
+        () -> assertEquals(st[1].threadId, operatorThreadIds[1], "1"), // by subscribeOn(st[1].scheduler)
+        () -> assertEquals(st[2].threadId, operatorThreadIds[2], "2")  // by subscribeOn(st[2].scheduler)
+      );
+    }).verifyComplete();
+  }
 }
